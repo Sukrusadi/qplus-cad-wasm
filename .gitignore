@@ -1,0 +1,6 @@
+out/
+out-node/
+emsdk/
+third_party/
+build/
+.DS_Store

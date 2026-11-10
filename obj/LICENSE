@@ -1,0 +1,27 @@
+Copyright (c) 2026 Queen Lojistik Hiz. Ltd. Şti. All rights reserved.
+
+The object files in this directory (part_metrics.o, qp_open.o, stl_import.o)
+are provided solely so that recipients of the Q-Plus web viewer can modify
+Open CASCADE Technology (or the other components in this repository) and
+relink qpcad.wasm, as permitted by section 6 of the GNU Lesser General Public
+License version 2.1.
+
+You may use, copy and link these object files for that purpose, and you may
+debug and modify the resulting work for your own use. You may not otherwise
+distribute them separately from this repository, and you may not
+reverse-engineer them except as far as needed to debug such modifications.
+
+Built with Emscripten 6.0.13 against Open CASCADE Technology V7_8_1,
+compile flags: -O2 -fexceptions -DOCC_CONVERT_SIGNALS, C++17.
+
+THE OBJECT FILES ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+---
+
+Bu klasördeki nesne dosyaları yalnız Q-Plus web görüntüleyicisini kullananların
+Open CASCADE Technology'yi (ya da bu depodaki diğer bileşenleri) değiştirip
+qpcad.wasm'ı yeniden bağlayabilmesi için verilir (LGPL 2.1, madde 6). Bu amaçla
+kullanılabilir, kopyalanabilir ve bağlanabilir; ortaya çıkan iş kişisel kullanım
+için değiştirilebilir ve hatası ayıklanabilir. Bu depodan ayrı dağıtılamaz;
+bu değişikliklerin hata ayıklaması için gerekenin dışında tersine mühendislik
+yapılamaz.
