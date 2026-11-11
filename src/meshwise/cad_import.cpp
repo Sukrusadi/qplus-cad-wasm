@@ -11,6 +11,11 @@
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
+#include <ElSLib.hxx>
+#include <GeomConvert_SurfToAnaSurf.hxx>
+#include <Geom_CylindricalSurface.hxx>
+#include <Geom_Plane.hxx>
+#include <TopLoc_Location.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <IGESCAFControl_Reader.hxx>
 #include <IGESControl_Reader.hxx>
@@ -45,6 +50,7 @@
 #include <XCAFPrs_IndexedDataMapOfShapeStyle.hxx>
 #include <XCAFPrs_Style.hxx>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -171,30 +177,72 @@ void addFaceRecord(const TopoDS_Face& face, const gp_Trsf& nodeTrsf, std::vector
         r[at + 1] = (float)v.Y();
         r[at + 2] = (float)v.Z();
     };
+    // Silindir kaydı: eksen, yarıçap, eksen boyunca [a, b], açı aralığı; normal eksene bakıyorsa delik.
+    auto putCylinder = [&](const gp_Cylinder& c, double a, double b, double span) {
+        r[0] = 1;
+        const gp_Ax1 ax = c.Axis();
+        put(1, ax.Location().Transformed(nodeTrsf).XYZ());
+        put(4, ax.Direction().Transformed(nodeTrsf).XYZ());
+        r[7] = (float)c.Radius();
+        r[8] = (float)a;
+        r[9] = (float)b;
+        gp_Vec d(ax.Direction()), ap(ax.Location(), P);
+        r[10] = N.Dot(ap - d * ap.Dot(d)) < 0 ? 1.f : 0.f;
+        r[11] = (float)span;
+    };
+    auto putPlane = [&](const gp_Pln& pl) {
+        r[0] = 0;
+        put(1, pl.Location().Transformed(nodeTrsf).XYZ());
+        put(4, (N.SquareMagnitude() > 1e-20 ? gp_Dir(N) : pl.Axis().Direction()).Transformed(nodeTrsf).XYZ());
+    };
     switch (s.GetType()) {
-        case GeomAbs_Plane: {
-            r[0] = 0;
-            put(1, s.Plane().Location().Transformed(nodeTrsf).XYZ());
-            if (N.SquareMagnitude() > 1e-20) put(4, gp_Dir(N).Transformed(nodeTrsf).XYZ());
-            break;
-        }
-        case GeomAbs_Cylinder: {
-            r[0] = 1;
-            const gp_Cylinder c = s.Cylinder();
-            const gp_Ax1 ax = c.Axis();
-            put(1, ax.Location().Transformed(nodeTrsf).XYZ());
-            put(4, ax.Direction().Transformed(nodeTrsf).XYZ());
-            r[7] = (float)c.Radius();
-            r[8] = (float)v0;
-            r[9] = (float)v1;
-            gp_Vec d(ax.Direction()), ap(ax.Location(), P);
-            r[10] = N.Dot(ap - d * ap.Dot(d)) < 0 ? 1.f : 0.f;  // normal eksene bakıyorsa delik
-            r[11] = (float)(u1 - u0);
-            break;
-        }
+        case GeomAbs_Plane: putPlane(s.Plane()); break;
+        case GeomAbs_Cylinder: putCylinder(s.Cylinder(), v0, v1, u1 - u0); break;
         case GeomAbs_Cone: r[0] = 2; break;
         case GeomAbs_Sphere: r[0] = 3; break;
         case GeomAbs_Torus: r[0] = 4; break;
+        case GeomAbs_BSplineSurface:
+        case GeomAbs_BezierSurface: {
+            // Bazı CAD programları (ve çoğu IGES) düz yüzü ve deliği B-spline olarak yazar.
+            // Tolerans içinde düzlem ya da silindire dönüşüyorsa öyle kaydedilir: ölçüm için aynı yüz.
+            try {
+                OCC_CATCH_SIGNALS
+                TopLoc_Location loc;
+                Handle(Geom_Surface) g = BRep_Tool::Surface(face, loc);
+                if (g.IsNull()) break;
+                GeomConvert_SurfToAnaSurf conv(g);
+                Handle(Geom_Surface) ana = conv.ConvertToAnalytical(1e-4, u0, u1, v0, v1);
+                if (ana.IsNull()) break;
+                if (!loc.IsIdentity()) ana = Handle(Geom_Surface)::DownCast(ana->Transformed(loc.Transformation()));
+                if (auto pl = Handle(Geom_Plane)::DownCast(ana)) {
+                    putPlane(pl->Pln());
+                } else if (auto cy = Handle(Geom_CylindricalSurface)::DownCast(ana)) {
+                    // Eksen boyu ve açı aralığı özgün yüzün örneklerinden (parametreleme farklı).
+                    const gp_Cylinder c = cy->Cylinder();
+                    const int n = 16;
+                    std::vector<double> ang;
+                    double a = 1e300, b = -1e300;
+                    for (int i = 0; i <= n; ++i)
+                        for (int j = 0; j <= n; ++j) {
+                            gp_Pnt q = s.Value(u0 + (u1 - u0) * i / n, v0 + (v1 - v0) * j / n);
+                            double cu, cv;
+                            ElSLib::Parameters(c, q, cu, cv);
+                            ang.push_back(cu);
+                            a = std::min(a, cv);
+                            b = std::max(b, cv);
+                        }
+                    std::sort(ang.begin(), ang.end());
+                    double gap = ang.front() + 2 * M_PI - ang.back();
+                    for (size_t k = 1; k < ang.size(); ++k) gap = std::max(gap, ang[k] - ang[k - 1]);
+                    // Örnek aralığından küçük boşluk: tam tur.
+                    const double span = gap < 2 * M_PI / n * 1.5 ? 2 * M_PI : 2 * M_PI - gap;
+                    putCylinder(c, a, b, span);
+                }
+            } catch (const Standard_Failure&) {
+                // Dönüşmedi: "diğer" kalır.
+            }
+            break;
+        }
         default: break;
     }
     out.insert(out.end(), r, r + fsv::kFsmFaceRecord);
